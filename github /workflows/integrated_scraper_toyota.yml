@@ -44,9 +44,9 @@ jobs:
 
       - name: Run Integrated Scraper (Toyota)
         env:
-          # GOOGLE_CREDENTIALS: 認証情報
+          # GOOGLE_CREDENTIALS: サービスアカウントJSONの“中身”
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          # GCP_SERVICE_ACCOUNT_KEY: 認証情報 (フォールバック用)
+          # GCP_SERVICE_ACCOUNT_KEY: サービスアカウントJSONの“中身” (フォールバック用)
           GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
-          python integrated_main_toyota.py # 実行するPythonファイルを変更
+          python integrated_main_toyota.py # 実行ファイル名を変更
