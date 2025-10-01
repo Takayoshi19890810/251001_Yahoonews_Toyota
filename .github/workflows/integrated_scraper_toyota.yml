@@ -1,0 +1,52 @@
+name: Yahoo News Scraper (Integrated) - TOYOTA 🚗
+
+on:
+  workflow_dispatch: {}            # 手動実行
+  schedule:
+    # 毎日 15:10 JST == 06:10 UTC に実行
+    - cron: '10 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Run scraper (Toyota)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system deps (Chrome)
+        # Selenium/Chromeをヘッドレス環境で実行するために必要な依存関係をインストール
+        run: |
+          # 警告を回避するため、既存のシステムパスにあるChromedriverを削除
+          sudo rm -f /usr/bin/chromedriver /usr/local/bin/chromedriver
+          
+          sudo apt-get update
+          sudo apt-get install -y wget unzip xvfb libxi6 curl libnss3 libatk-bridge2.0-0
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt-get -f install -y
+          google-chrome --version
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Integrated Scraper (Toyota)
+        env:
+          # GOOGLE_CREDENTIALS: サービスアカウントJSONの“中身”
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          # GCP_SERVICE_ACCOUNT_KEY: サービスアカウントJSONの“中身” (フォールバック用)
+          GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          python integrated_main_toyota.py # 実行ファイル名を変更
