@@ -30,10 +30,10 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 # ====== 設定 ======
 # 指定された単一のスプレッドシートID
-SHARED_SPREADSHEET_ID = "1vy0quUujxw5hagwATB5W87wD4tVTd5d8qxgt8IekRTY" 
+SHARED_SPREADSHEET_ID = "1AnpIQAxa-cVaPcB2nHc1cGkrmRCywjloUma05fs89Hs" 
 
 # 【ステップ1, 2】ニュースリスト取得用の設定
-KEYWORD = "日産"
+KEYWORD = "トヨタ"
 SOURCE_SPREADSHEET_ID = SHARED_SPREADSHEET_ID
 SOURCE_SHEET_NAME = "Yahoo"
 
@@ -135,7 +135,10 @@ def get_yahoo_news_with_selenium(keyword: str) -> list[dict]:
     options.add_argument("--window-size=1280,1024")
 
     try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        # ChromeDriverManager().install()は実行パスを返す。これをServiceに渡す。
+        driver_path = ChromeDriverManager().install()
+        service = Service(driver_path)
+        driver = webdriver.Chrome(service=service, options=options)
     except Exception as e:
         print(f"❌ WebDriverの初期化に失敗しました: {e}")
         return []
@@ -258,7 +261,8 @@ def ensure_ae_header(ws: gspread.Worksheet) -> None:
     head = ws.row_values(1)
     target = ["ソース", "タイトル", "URL", "投稿日", "掲載元"]
     if head[:len(target)] != target:
-        ws.update('A1', [target])
+        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
+        ws.update(range_name='A1', values=[target])
 
 def ensure_body_comment_headers(ws: gspread.Worksheet, max_comments: int) -> None:
     """F列以降の本文・コメントヘッダーを保証"""
@@ -269,7 +273,8 @@ def ensure_body_comment_headers(ws: gspread.Worksheet, max_comments: int) -> Non
     comment_headers = [f"コメント{i}" for i in range(1, max(1, max_comments) + 1)]
     target = base + body_headers + comments_count + comment_headers
     if current != target:
-        ws.update('A1', [target])
+        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
+        ws.update(range_name='A1', values=[target])
 
 
 # --- データ転送 (main2.py) ---
@@ -364,13 +369,13 @@ def fetch_comments_with_selenium(base_url: str) -> List[str]:
     options.add_argument("--window-size=1280,2000")
     
     try:
-        driver = webdriver.Chrome(options=options)
-    except Exception:
-        try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        except Exception as e:
-            print(f"❌ WebDriver初期化エラー: {e}")
-            return []
+        # ChromeDriverManager().install()を使用し、互換性のあるドライバーを確実に見つける
+        driver_path = ChromeDriverManager().install()
+        service = Service(driver_path)
+        driver = webdriver.Chrome(service=service, options=options)
+    except Exception as e:
+        print(f"❌ WebDriver初期化エラー: {e}")
+        return []
 
     comments: List[str] = []
     last_tail: Optional[str] = None
@@ -455,7 +460,8 @@ def write_bodies_and_comments(ws: gspread.Worksheet) -> None:
 
     # F2 から一括更新
     if rows_data:
-        ws.update("F2", rows_data)
+        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
+        ws.update(range_name="F2", values=rows_data)
         print(f"✅ F列以降に本文・コメントを書き込み完了: {len(rows_data)} 行")
 
 
