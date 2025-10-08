@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-統合スクリプト（トヨタ版）：
+統合スクリプト（トヨタ版・修正版）：
 1. Yahoo!ニュース検索結果から「トヨタ」の記事リストを取得。
 2. そのリストを単一スプレッドシートの「Yahoo」シートに追記。
 3. 追記された記事リストから、前日15:00〜当日14:59:59の分を抽出し、
    記事本文とコメントを取得。
 4. 取得した詳細データを同じスプレッドシートの当日日付タブに書き込み。
+
+【本修正ポイント】
+- コメントは「1ページ＝最大10コメント」をJSON配列文字列として1セルにまとめ、ページごとに Q 列以降へ配置。
+  例）Q: コメント(1ページJSON), R: コメント(2ページJSON), ...
+- ヘッダーもページ単位のJSON列名へ変更。
 """
 
 import os
@@ -85,6 +90,12 @@ def parse_post_date(raw, today_jst: datetime) -> Optional[datetime]:
     if isinstance(raw, datetime):
         return raw.astimezone(TZ_JST) if raw.tzinfo else raw.replace(tzinfo=TZ_JST)
     return None
+
+def chunk(lst: List[str], size: int) -> List[List[str]]:
+    """リストを size 件ごとのチャンクに分割（size <= 0 の場合は全体を1チャンク）"""
+    if size <= 0:
+        return [lst]
+    return [lst[i:i + size] for i in range(0, len(lst), size)]
 
 # ====== 認証 ======
 
@@ -239,7 +250,7 @@ def write_news_list_to_source(gc: gspread.Client, articles: list[dict]):
 
 # --- DESTシート操作 ---
 def ensure_today_sheet(sh: gspread.Spreadsheet, today_tab: str) -> gspread.Worksheet:
-    """当日タブが存在しない場合は作成します"""
+    """当日タブが存在しない場合は作成します（元設定のまま rows=3000, cols=300）"""
     try:
         ws = sh.worksheet(today_tab)
     except gspread.WorksheetNotFound:
@@ -256,19 +267,23 @@ def ensure_ae_header(ws: gspread.Worksheet) -> None:
     head = ws.row_values(1)
     target = ["ソース", "タイトル", "URL", "投稿日", "掲載元"]
     if head[:len(target)] != target:
-        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
         ws.update(range_name='A1', values=[target])
 
-def ensure_body_comment_headers(ws: gspread.Worksheet, max_comments: int) -> None:
-    """F列以降の本文・コメントヘッダーを保証（gspreadの警告を回避済み）"""
-    current = ws.row_values(1)
+def ensure_body_comment_headers(ws: gspread.Worksheet, max_comment_pages: int) -> None:
+    """
+    F列以降のヘッダーを保証：
+      - F..O: 本文(1〜10ページ)
+      - P: コメント数
+      - Q..: コメント（ページ単位JSON）例: コメント(1ページJSON), コメント(2ページJSON)...
+    """
     base = ["ソース", "タイトル", "URL", "投稿日", "掲載元"]
     body_headers = [f"本文({i}ページ)" for i in range(1, 11)]
     comments_count = ["コメント数"]
-    comment_headers = [f"コメント{i}" for i in range(1, max(1, max_comments) + 1)]
+    comment_headers = [f"コメント({i}ページJSON)" for i in range(1, max(1, max_comment_pages) + 1)]
     target = base + body_headers + comments_count + comment_headers
+
+    current = ws.row_values(1)
     if current != target:
-        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
         ws.update(range_name='A1', values=[target])
 
 
@@ -355,7 +370,7 @@ def fetch_article_pages(base_url: str) -> Tuple[str, str, List[str]]:
     return title, article_date, bodies
 
 def fetch_comments_with_selenium(base_url: str) -> List[str]:
-    """記事コメントをSeleniumで取得します"""
+    """記事コメントをSeleniumで取得します（全ページ巡回・上限あり）"""
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -418,6 +433,9 @@ def fetch_comments_with_selenium(base_url: str) -> List[str]:
 def write_bodies_and_comments(ws: gspread.Worksheet) -> None:
     """
     DESTシートのF列以降に本文とコメントを書き込み
+      - 本文: F..O（最大10ページ）
+      - コメント数: P
+      - コメント本文: Q..（1ページ=最大10コメントをJSON文字列で1セル）
     """
     urls = ws.col_values(3)[1:]
     total = len(urls)
@@ -425,7 +443,8 @@ def write_bodies_and_comments(ws: gspread.Worksheet) -> None:
     if total == 0: return
 
     rows_data: List[List[str]] = []
-    max_comments = 0
+    max_comment_pages = 0  # 最大全ページ数（ヘッダーと列幅の指標）
+
     # スプレッドシートの行番号(2から開始)
     for row_idx, url in enumerate(urls, start=2):
         print(f"  - ({row_idx-1}/{total}) {url}")
@@ -433,30 +452,38 @@ def write_bodies_and_comments(ws: gspread.Worksheet) -> None:
             _title, _date, bodies = fetch_article_pages(url)
             comments = fetch_comments_with_selenium(url)
 
+            # 本文セル（最大 MAX_BODY_PAGES にフィット）
             body_cells = bodies[:MAX_BODY_PAGES] + [""] * (MAX_BODY_PAGES - len(bodies))
+
+            # コメントは10件＝1ページとして分割し、ページごとにJSON文字列へ
+            comment_pages = chunk(comments, 10)  # [[c1..c10], [c11..c20], ...]
+            json_per_page = [json.dumps(pg, ensure_ascii=False) for pg in comment_pages]
             cnt = len(comments)
-            row = body_cells + [cnt] + comments
+
+            # 行データ: [本文x10, コメント数, コメントページJSONxN]
+            row = body_cells + [cnt] + json_per_page
             rows_data.append(row)
-            if cnt > max_comments:
-                max_comments = cnt
+
+            if len(comment_pages) > max_comment_pages:
+                max_comment_pages = len(comment_pages)
+
         except Exception as e:
             print(f"    ! Error: {e}")
-            rows_data.append(([""] * MAX_BODY_PAGES) + [0])
+            rows_data.append(([""] * MAX_BODY_PAGES) + [0])  # コメントJSONなし
 
-    # データ行の長さを最大コメント数に合わせて調整
-    need_cols = MAX_BODY_PAGES + 1 + max_comments
+    # ヘッダー整備（ページ数に応じて可変列名を作成）
+    ensure_body_comment_headers(ws, max_comment_pages=max_comment_pages)
+
+    # 各行の長さを「本文(10)+コメント数(1)+max_comment_pages」に合わせて右側をパディング
+    need_cols = MAX_BODY_PAGES + 1 + max_comment_pages
     for i in range(len(rows_data)):
         if len(rows_data[i]) < need_cols:
             rows_data[i].extend([""] * (need_cols - len(rows_data[i])))
 
-    # ヘッダー整備
-    ensure_body_comment_headers(ws, max_comments=max_comments)
-
     # F2 から一括更新
     if rows_data:
-        # 修正: 名前付き引数を使用し、DeprecationWarningを回避
         ws.update(range_name="F2", values=rows_data)
-        print(f"✅ F列以降に本文・コメントを書き込み完了: {len(rows_data)} 行")
+        print(f"✅ F列以降に本文・コメント(JSON/ページ単位)を書き込み完了: {len(rows_data)} 行（最大ページ={max_comment_pages}）")
 
 
 # =========================================================================
