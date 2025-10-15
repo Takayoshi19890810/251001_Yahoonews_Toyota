@@ -254,7 +254,7 @@ def ensure_today_sheet(sh: gspread.Spreadsheet, today_tab: str) -> gspread.Works
     try:
         ws = sh.worksheet(today_tab)
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=today_tab, rows="3000", cols="300")
+      ws = sh.add_worksheet(title=today_tab, rows="500", cols="516")
     return ws
 
 def get_existing_urls(ws: gspread.Worksheet) -> Set[str]:
